@@ -30,7 +30,7 @@ struct mapped_file_struct {
     struct tosfs_superblock* superblock;
     struct tosfs_inode* inodes;
     struct tosfs_dentry* root_block;
-    struct tosfs_dentry* data_blocks;
+    char* data_blocks;
 };
 
 
@@ -91,7 +91,7 @@ void read_mapped_file_as_tosfs_file(struct mapped_file_struct* mapped_file) {
     mapped_file->root_block = (struct tosfs_dentry*) tmp_ptr;
 
     tmp_ptr += TOSFS_BLOCK_SIZE;
-    mapped_file->data_blocks = (struct tosfs_dentry*) tmp_ptr;
+    mapped_file->data_blocks = (char*) tmp_ptr;
 }
 
 
@@ -213,7 +213,6 @@ void disp_structures_tosfs() {
     close_mapped_file(mapped_file);
 }
 
-
 int main(int argc, char *argv[]) {
     printf(
         "\nINFO: tosfs can support %lu inodes and %lu inode entries\n",
@@ -224,7 +223,6 @@ int main(int argc, char *argv[]) {
 
     return EXIT_SUCCESS;
 }
-
 
 
 
