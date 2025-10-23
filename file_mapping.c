@@ -22,6 +22,10 @@
 #define POS_OF_BLOCK_4_IN_DATA_BLOCKS (1)
 
 
+struct data_block_structure {
+    char data[TOSFS_BLOCK_SIZE];
+};
+
 struct mapped_file_struct {
     int fd;
     void* mapped_file;
@@ -30,7 +34,7 @@ struct mapped_file_struct {
     struct tosfs_superblock* superblock;
     struct tosfs_inode* inodes;
     struct tosfs_dentry* root_block;
-    char* data_blocks;
+    struct data_block_structure* data_blocks;
 };
 
 
@@ -91,7 +95,7 @@ void read_mapped_file_as_tosfs_file(struct mapped_file_struct* mapped_file) {
     mapped_file->root_block = (struct tosfs_dentry*) tmp_ptr;
 
     tmp_ptr += TOSFS_BLOCK_SIZE;
-    mapped_file->data_blocks = (char*) tmp_ptr;
+    mapped_file->data_blocks = (struct data_block_structure*) tmp_ptr;
 }
 
 
@@ -143,10 +147,10 @@ void disp_structure_block_tosfs_dentry(const struct tosfs_dentry* disk_entry) {
     }
 }
 
-void disp_data_block(const void* data_block) {
+void disp_data_block(const struct data_block_structure* data_block) {
     printf(
         "\tdata block as str:\n%s\n",
-        (const char*)data_block
+        data_block->data
     );
     printf(
         "\tdata block as binary:"
@@ -156,7 +160,7 @@ void disp_data_block(const void* data_block) {
         if (i % PRINT_ROW_SIZE == 0) {
             printf("\n");
         }
-        const char byte_to_print = ((const char*)data_block)[i];
+        const char byte_to_print = data_block->data[i];
         printf(PRINTF_BINARY_PATTERN_INT8, PRINTF_BYTE_TO_BINARY_INT8(byte_to_print));
     }
 }
