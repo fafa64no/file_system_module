@@ -148,16 +148,20 @@ static void dirbuf_add(fuse_req_t req, struct directory_buffer *buf, const char 
     struct stat stbuf;
     const size_t old_size = buf->size;
     buf->size += fuse_add_direntry(req, NULL, 0, name, NULL, 0);
-	buf->data_pointer = (char *) realloc(buf->data_pointer, buf->size);
+    char* new_ptr = realloc(buf->data_pointer, buf->size);
+    if (new_ptr == NULL) {
+        perror("dirbuf_add: realloc failed");
+        exit(EXIT_FAILURE);
+    }
+    buf->data_pointer = new_ptr;
     memset(&stbuf, 0, sizeof(stbuf));
     stbuf.st_ino = ino;
+    fprintf(stderr, "dirbuf_add: name: %s\n", name);
+    fflush(stderr);
     fuse_add_direntry(req, buf->data_pointer + old_size, buf->size - old_size, name, &stbuf, buf->size);
 }
 
 static int reply_buf_limited(fuse_req_t req, const char *buf, const size_t buffer_size, const off_t offset, size_t maxsize) {
-    fprintf(stderr, "reply_buf_limited: maxsize: %lu\n", maxsize);
-    fflush(stderr);
-
     if (offset < buffer_size) {
         return fuse_reply_buf(req, buf + offset, min_macro(buffer_size - offset, maxsize));
     }
@@ -220,8 +224,7 @@ static void ensea_ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t 
     struct tosfs_dentry* disk_entry = mapped_file->root_block;
     for (unsigned int entry_number = 0; entry_number < MAX_INODE_ENTRY_NUMBER; entry_number++) {
         if (disk_entry->inode == 0) {
-            disk_entry++;
-            continue;
+            break;
         }
 
         dirbuf_add(req, &buf, disk_entry->name, disk_entry->inode);
