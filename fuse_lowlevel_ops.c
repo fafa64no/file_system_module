@@ -119,7 +119,14 @@ static void read_mapped_file_as_tosfs_file() {
 
 static int ensea_ll_stat(fuse_ino_t ino, struct stat *stbuf) {
     struct tosfs_inode* inode = &mapped_file->inodes[ino];
-    if (inode->inode <= mapped_file->superblock->root_inode || inode->inode > MAX_INODE_NUMBER) {
+    if (inode->inode == mapped_file->superblock->root_inode) {
+        stbuf->st_ino = (ino_t) inode->inode;
+        stbuf->st_nlink = (nlink_t) inode->nlink;
+        stbuf->st_mode = S_IFDIR | 0755;
+        return EXIT_SUCCESS;
+    }
+
+    if (inode->inode < mapped_file->superblock->root_inode || inode->inode >= MAX_INODE_NUMBER) {
         return SYSTEM_CALL_ERROR;
     }
 
@@ -132,8 +139,7 @@ static int ensea_ll_stat(fuse_ino_t ino, struct stat *stbuf) {
         stbuf->st_size = (off_t) inode->size;
     }
 
-    mode_t perms = (mode_t)(inode->perm & 0777);
-    stbuf->st_mode = S_IFREG | perms;
+    stbuf->st_mode = S_IFREG | (inode->perm & 0777);
 
     return EXIT_SUCCESS;
 }
@@ -142,18 +148,16 @@ static void dirbuf_add(fuse_req_t req, struct directory_buffer *buf, const char 
     struct stat stbuf;
     const size_t old_size = buf->size;
     buf->size += fuse_add_direntry(req, NULL, 0, name, NULL, 0);
-    char* new_ptr = realloc(buf->data_pointer, buf->size);
-    if (new_ptr == NULL) {
-        perror("dirbuf_add: realloc failed");
-        exit(EXIT_FAILURE);
-    }
-    buf->data_pointer = new_ptr;
+	buf->data_pointer = (char *) realloc(buf->data_pointer, buf->size);
     memset(&stbuf, 0, sizeof(stbuf));
     stbuf.st_ino = ino;
     fuse_add_direntry(req, buf->data_pointer + old_size, buf->size - old_size, name, &stbuf, buf->size);
 }
 
 static int reply_buf_limited(fuse_req_t req, const char *buf, const size_t buffer_size, const off_t offset, size_t maxsize) {
+    fprintf(stderr, "reply_buf_limited: maxsize: %lu\n", maxsize);
+    fflush(stderr);
+
     if (offset < buffer_size) {
         return fuse_reply_buf(req, buf + offset, min_macro(buffer_size - offset, maxsize));
     }
@@ -206,7 +210,7 @@ static void ensea_ll_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_in
 static void ensea_ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi) {
     (void) fi;
 
-    if (ino != 1) {
+    if (ino != mapped_file->superblock->root_inode) {
         fuse_reply_err(req, ENOTDIR);
         return;
     }
@@ -221,6 +225,7 @@ static void ensea_ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t 
         }
 
         dirbuf_add(req, &buf, disk_entry->name, disk_entry->inode);
+        disk_entry++;
     }
 
     reply_buf_limited(req, buf.data_pointer, buf.size, off, size);
