@@ -156,8 +156,6 @@ static void dirbuf_add(fuse_req_t req, struct directory_buffer *buf, const char 
     buf->data_pointer = new_ptr;
     memset(&stbuf, 0, sizeof(stbuf));
     stbuf.st_ino = ino;
-    fprintf(stderr, "dirbuf_add: name: %s\n", name);
-    fflush(stderr);
     fuse_add_direntry(req, buf->data_pointer + old_size, buf->size - old_size, name, &stbuf, buf->size);
 }
 
