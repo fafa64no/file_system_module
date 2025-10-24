@@ -27,11 +27,10 @@
 #define MAX_INODE_NUMBER (TOSFS_BLOCK_SIZE / sizeof(struct tosfs_inode))
 #define MAX_INODE_ENTRY_NUMBER (TOSFS_BLOCK_SIZE / sizeof(struct tosfs_inode))
 #define MAX_NB_DATA_BLOCKS (29)
+#define DATA_BLOCK_POS_OFFSET (-3)
 
 #define min_macro(x, y) ((x) < (y) ? (x) : (y))
 #define max_macro(x, y) ((x) > (y) ? (x) : (y))
-
-static const char *tmp_str = "Megalo Panzer Salad!!!\n";
 
 
 struct data_block_structure {
@@ -122,7 +121,7 @@ static int ensea_ll_stat(fuse_ino_t ino, struct stat *stbuf) {
     if (inode->inode == mapped_file->superblock->root_inode) {
         stbuf->st_ino = (ino_t) inode->inode;
         stbuf->st_nlink = (nlink_t) inode->nlink;
-        stbuf->st_mode = S_IFDIR | 0755;
+        stbuf->st_mode = S_IFDIR | (inode->perm & 0777);
         return EXIT_SUCCESS;
     }
 
@@ -211,7 +210,6 @@ static void ensea_ll_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_in
 
 static void ensea_ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi) {
     (void) fi;
-
     if (ino != mapped_file->superblock->root_inode) {
         fuse_reply_err(req, ENOTDIR);
         return;
@@ -234,8 +232,8 @@ static void ensea_ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t 
 }
 
 static void ensea_ll_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
-    /// TODO open file
-    if (ino != 2) {
+    /// TODO open file (below is code from hello_ll.c)
+    if (ino != 2 && ino != 3) {
         fuse_reply_err(req, EISDIR);
     } else if ((fi->flags & 3) != O_RDONLY) {
         fuse_reply_err(req, EACCES);
@@ -245,11 +243,20 @@ static void ensea_ll_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info 
 }
 
 static void ensea_ll_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi) {
-    /// TODO output file content
     (void) fi;
+    if (ino <= mapped_file->superblock->root_inode || ino >= MAX_INODE_NUMBER) {
+		fuse_reply_err(req, EISDIR);
+        return;
+    }
 
-    assert(ino == 2);
-    reply_buf_limited(req, tmp_str, strlen(tmp_str), off, size);
+    struct tosfs_inode* inode = &mapped_file->inodes[ino];
+    if (inode->inode == 0) {
+		fuse_reply_err(req, ENOENT);
+        return;
+    }
+
+    struct data_block_structure* data_block = &mapped_file->data_blocks[inode->block_no+DATA_BLOCK_POS_OFFSET];
+    reply_buf_limited(req, &(data_block->data[0]), strlen(data_block->data), off, size);
 }
 
 
