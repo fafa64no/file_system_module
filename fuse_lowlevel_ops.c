@@ -17,6 +17,7 @@
 #include <limits.h>
 #include <time.h>
 #include <sys/mman.h>
+#include <assert.h>
 
 #include "tosfs.h"
 
@@ -26,6 +27,11 @@
 #define MAX_INODE_NUMBER (TOSFS_BLOCK_SIZE / sizeof(struct tosfs_inode))
 #define MAX_INODE_ENTRY_NUMBER (TOSFS_BLOCK_SIZE / sizeof(struct tosfs_inode))
 #define MAX_NB_DATA_BLOCKS (29)
+
+#define min_macro(x, y) ((x) < (y) ? (x) : (y))
+#define max_macro(x, y) ((x) > (y) ? (x) : (y))
+
+static const char *tmp_str = "Megalo Panzer Salad!!!\n";
 
 
 struct data_block_structure {
@@ -41,6 +47,11 @@ struct mapped_file_struct {
     struct tosfs_inode* inodes;
     struct tosfs_dentry* root_block;
     struct data_block_structure* data_blocks;
+};
+
+struct directory_buffer {
+    char* data_pointer;
+    size_t size;
 };
 
 static struct mapped_file_struct* mapped_file;
@@ -108,7 +119,7 @@ static void read_mapped_file_as_tosfs_file() {
 
 static int ensea_ll_stat(fuse_ino_t ino, struct stat *stbuf) {
     struct tosfs_inode* inode = &mapped_file->inodes[ino];
-    if (inode == NULL) {
+    if (inode->inode <= mapped_file->superblock->root_inode || inode->inode > MAX_INODE_NUMBER) {
         return SYSTEM_CALL_ERROR;
     }
 
@@ -117,9 +128,9 @@ static int ensea_ll_stat(fuse_ino_t ino, struct stat *stbuf) {
     stbuf->st_gid = (gid_t) inode->gid;
     stbuf->st_nlink = (nlink_t) inode->nlink;
 
-    stbuf->st_size = (off_t) inode->size;
-    stbuf->st_blksize = TOSFS_BLOCK_SIZE;
-    stbuf->st_blocks = 1;
+    if (ino != mapped_file->superblock->root_inode) {
+        stbuf->st_size = (off_t) inode->size;
+    }
 
     mode_t perms = (mode_t)(inode->perm & 0777);
     stbuf->st_mode = S_IFREG | perms;
@@ -127,13 +138,63 @@ static int ensea_ll_stat(fuse_ino_t ino, struct stat *stbuf) {
     return EXIT_SUCCESS;
 }
 
+static void dirbuf_add(fuse_req_t req, struct directory_buffer *buf, const char *name, fuse_ino_t ino) {
+    struct stat stbuf;
+    const size_t old_size = buf->size;
+    buf->size += fuse_add_direntry(req, NULL, 0, name, NULL, 0);
+    char* new_ptr = realloc(buf->data_pointer, buf->size);
+    if (new_ptr == NULL) {
+        perror("dirbuf_add: realloc failed");
+        exit(EXIT_FAILURE);
+    }
+    buf->data_pointer = new_ptr;
+    memset(&stbuf, 0, sizeof(stbuf));
+    stbuf.st_ino = ino;
+    fuse_add_direntry(req, buf->data_pointer + old_size, buf->size - old_size, name, &stbuf, buf->size);
+}
+
+static int reply_buf_limited(fuse_req_t req, const char *buf, const size_t buffer_size, const off_t offset, size_t maxsize) {
+    if (offset < buffer_size) {
+        return fuse_reply_buf(req, buf + offset, min_macro(buffer_size - offset, maxsize));
+    }
+
+    return fuse_reply_buf(req, NULL, 0);
+}
+
 
 static void ensea_ll_lookup(fuse_req_t req, fuse_ino_t parent, const char *name) {
-    /// TODO find inode corresponding to name
+    struct fuse_entry_param entry_param;
+    struct tosfs_dentry* disk_entry = mapped_file->root_block;
+
+    for (unsigned int entry_number = 0; entry_number < MAX_INODE_ENTRY_NUMBER; entry_number++) {
+        if (disk_entry->inode == 0) {
+            // We don't break the loop because (depending on how we remove inodes) all inodes might not be at the start
+            // of the inode map
+            disk_entry++;
+            continue;
+        }
+
+        if (parent != 1 || strcmp(name, disk_entry->name) != 0) {
+            disk_entry++;
+            continue;
+        }
+
+        memset(&entry_param, 0, sizeof(entry_param));
+        entry_param.ino = disk_entry->inode;
+        entry_param.attr_timeout = 1.0;
+        entry_param.entry_timeout = 1.0;
+        ensea_ll_stat(entry_param.ino, &entry_param.attr);
+
+        fuse_reply_entry(req, &entry_param);
+        return;
+    }
+
+    fuse_reply_err(req, ENOENT);
 }
 
 static void ensea_ll_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
     struct stat stbuf = {0};
+    (void) fi;
 
     if (ensea_ll_stat(ino, &stbuf) == SYSTEM_CALL_ERROR) {
         fuse_reply_err(req, ENOENT);
@@ -143,15 +204,46 @@ static void ensea_ll_getattr(fuse_req_t req, fuse_ino_t ino, struct fuse_file_in
 }
 
 static void ensea_ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi) {
-    /// TODO list all files in dir
+    (void) fi;
+
+    if (ino != 1) {
+        fuse_reply_err(req, ENOTDIR);
+        return;
+    }
+
+    struct directory_buffer buf = {0};
+
+    struct tosfs_dentry* disk_entry = mapped_file->root_block;
+    for (unsigned int entry_number = 0; entry_number < MAX_INODE_ENTRY_NUMBER; entry_number++) {
+        if (disk_entry->inode == 0) {
+            disk_entry++;
+            continue;
+        }
+
+        dirbuf_add(req, &buf, disk_entry->name, disk_entry->inode);
+    }
+
+    reply_buf_limited(req, buf.data_pointer, buf.size, off, size);
+    free(buf.data_pointer);
 }
 
 static void ensea_ll_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
-    /// TODO
+    /// TODO open file
+    if (ino != 2) {
+        fuse_reply_err(req, EISDIR);
+    } else if ((fi->flags & 3) != O_RDONLY) {
+        fuse_reply_err(req, EACCES);
+    } else {
+        fuse_reply_open(req, fi);
+    }
 }
 
 static void ensea_ll_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off, struct fuse_file_info *fi) {
     /// TODO output file content
+    (void) fi;
+
+    assert(ino == 2);
+    reply_buf_limited(req, tmp_str, strlen(tmp_str), off, size);
 }
 
 
